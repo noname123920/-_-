@@ -1,432 +1,731 @@
+import sys
 import openpyxl
-from openpyxl import Workbook
-import os
+from PySide6.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
+    QWidget, QLabel, QLineEdit, QComboBox, QPushButton, 
+    QTableWidget, QTableWidgetItem, QDateEdit, QListWidget,
+    QMessageBox, QGroupBox, QHeaderView,
+    QAbstractItemView
+)
+from PySide6.QtCore import Qt, QDate
+from datetime import datetime, timedelta
+import re
 
-class JournalFiller:
+class JournalApp(QMainWindow):
     def __init__(self, filename):
+        super().__init__()
         self.filename = filename
         self.wb = None
-        self.START_COLUMN = 5  # Столбец E
-        self.START_ROW = 7     # Строка 7
-        self.load_workbook()
+        self.START_ROW = 7
+        self.HOURS_COLS = {'lecture': 12, 'practice': 13, 'lab': 14}
+        self.selected_dates = []
+        self.LOAD_TYPES = ["осн.", "почас.", "совм."]
         
+        self.setup_ui()
+        self.load_workbook()
+    
+    def setup_ui(self):
+        self.setWindowTitle("Журнал преподавателя")
+        self.setGeometry(100, 100, 1200, 900)
+        
+        # Основной виджет
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        # Основной layout
+        main_layout = QVBoxLayout(central_widget)
+        
+        # Период
+        period_group = self.create_period_group()
+        main_layout.addWidget(period_group)
+        
+        # Даты
+        dates_group = self.create_dates_group()
+        main_layout.addWidget(dates_group)
+        
+        # Поля ввода
+        input_group = self.create_input_group()
+        main_layout.addWidget(input_group)
+        
+        # Кнопка добавления
+        self.add_btn = QPushButton("Добавить записи")
+        self.add_btn.clicked.connect(self.add_entries)
+        self.add_btn.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; font-weight: bold; padding: 10px; }")
+        main_layout.addWidget(self.add_btn)
+        
+        # Просмотр данных
+        view_group = self.create_view_group()
+        main_layout.addWidget(view_group, 1)
+    
+    def create_period_group(self):
+        group = QGroupBox("Выбор периода")
+        layout = QVBoxLayout()
+        
+        # Первая строка - даты и тип недели
+        first_row = QHBoxLayout()
+        
+        # Начало периода
+        first_row.addWidget(QLabel("Начало периода:"))
+        self.start_date = QDateEdit()
+        self.start_date.setDate(QDate(datetime.now().year, 9, 1))
+        self.start_date.setDisplayFormat("dd.MM.yyyy")
+        first_row.addWidget(self.start_date)
+        
+        # Конец периода
+        first_row.addWidget(QLabel("Конец периода:"))
+        self.end_date = QDateEdit()
+        self.end_date.setDate(QDate(datetime.now().year, 12, 31))
+        self.end_date.setDisplayFormat("dd.MM.yyyy")
+        first_row.addWidget(self.end_date)
+        
+        # Тип недели
+        first_row.addWidget(QLabel("Тип недели:"))
+        self.week_type_combo = QComboBox()
+        self.week_type_combo.addItems(["числитель", "знаменатель", "обе недели"])
+        first_row.addWidget(self.week_type_combo)
+        
+        first_row.addStretch()
+        layout.addLayout(first_row)
+        
+        # Вторая строка - кнопки и информация
+        second_row = QHBoxLayout()
+        
+        # Кнопки
+        self.gen_dates_btn = QPushButton("Сгенерировать даты по периоду")
+        self.gen_dates_btn.clicked.connect(self.generate_dates_by_period)
+        second_row.addWidget(self.gen_dates_btn)
+        
+        self.clear_dates_btn = QPushButton("Очистить даты")
+        self.clear_dates_btn.clicked.connect(self.clear_dates)
+        second_row.addWidget(self.clear_dates_btn)
+        
+        second_row.addStretch()
+        
+        # Информация о датах
+        self.dates_info_label = QLabel("Выбрано дат: 0")
+        self.dates_info_label.setStyleSheet("color: blue; font-weight: bold;")
+        second_row.addWidget(self.dates_info_label)
+        
+        layout.addLayout(second_row)
+        group.setLayout(layout)
+        return group
+    
+    def create_dates_group(self):
+        group = QGroupBox("Управление датами")
+        layout = QVBoxLayout()
+        
+        # Добавление даты
+        add_layout = QHBoxLayout()
+        add_layout.addWidget(QLabel("Добавить дату:"))
+        self.single_date = QDateEdit()
+        self.single_date.setDate(QDate.currentDate())
+        self.single_date.setDisplayFormat("dd.MM.yyyy")
+        add_layout.addWidget(self.single_date)
+        
+        self.add_date_btn = QPushButton("Добавить дату")
+        self.add_date_btn.clicked.connect(self.add_single_date)
+        add_layout.addWidget(self.add_date_btn)
+        add_layout.addStretch()
+        layout.addLayout(add_layout)
+        
+        # Удаление даты
+        remove_layout = QHBoxLayout()
+        remove_layout.addWidget(QLabel("Удалить дату:"))
+        self.remove_date_combo = QComboBox()
+        remove_layout.addWidget(self.remove_date_combo)
+        
+        self.remove_date_btn = QPushButton("Удалить дату")
+        self.remove_date_btn.clicked.connect(self.remove_selected_date)
+        remove_layout.addWidget(self.remove_date_btn)
+        remove_layout.addStretch()
+        layout.addLayout(remove_layout)
+        
+        # Список дат
+        layout.addWidget(QLabel("Выбранные даты:"))
+        self.dates_list = QListWidget()
+        layout.addWidget(self.dates_list)
+        
+        # Кнопки управления списком
+        list_buttons_layout = QHBoxLayout()
+        self.clear_all_btn = QPushButton("Очистить все даты")
+        self.clear_all_btn.clicked.connect(self.clear_dates)
+        list_buttons_layout.addWidget(self.clear_all_btn)
+        
+        self.refresh_list_btn = QPushButton("Обновить список")
+        self.refresh_list_btn.clicked.connect(self.update_dates_display)
+        list_buttons_layout.addWidget(self.refresh_list_btn)
+        list_buttons_layout.addStretch()
+        layout.addLayout(list_buttons_layout)
+        
+        group.setLayout(layout)
+        return group
+    
+    def create_input_group(self):
+        group = QGroupBox("Данные для ввода")
+        layout = QVBoxLayout()
+        
+        # Дисциплина
+        disc_layout = QHBoxLayout()
+        disc_layout.addWidget(QLabel("Дисциплина:"))
+        self.discipline_edit = QLineEdit()
+        disc_layout.addWidget(self.discipline_edit, 1)
+        layout.addLayout(disc_layout)
+        
+        # Группа
+        group_layout = QHBoxLayout()
+        group_layout.addWidget(QLabel("Группа:"))
+        self.group_edit = QLineEdit()
+        group_layout.addWidget(self.group_edit, 1)
+        layout.addLayout(group_layout)
+        
+        # Тип нагрузки
+        load_layout = QHBoxLayout()
+        load_layout.addWidget(QLabel("Вид нагрузки:"))
+        self.load_type_combo = QComboBox()
+        self.load_type_combo.addItems(self.LOAD_TYPES)
+        load_layout.addWidget(self.load_type_combo)
+        layout.addLayout(load_layout)
+        
+        # Часы
+        hours_layout = QHBoxLayout()
+        hours_layout.addWidget(QLabel("Лекции:"))
+        self.lecture_edit = QLineEdit()
+        self.lecture_edit.setPlaceholderText("0")
+        hours_layout.addWidget(self.lecture_edit)
+        
+        hours_layout.addWidget(QLabel("Практические:"))
+        self.practice_edit = QLineEdit()
+        self.practice_edit.setPlaceholderText("0")
+        hours_layout.addWidget(self.practice_edit)
+        
+        hours_layout.addWidget(QLabel("Лабораторные:"))
+        self.lab_edit = QLineEdit()
+        self.lab_edit.setPlaceholderText("0")
+        hours_layout.addWidget(self.lab_edit)
+        layout.addLayout(hours_layout)
+        
+        group.setLayout(layout)
+        return group
+    
+    def create_view_group(self):
+        group = QGroupBox("Просмотр данных")
+        layout = QVBoxLayout()
+        
+        # Панель управления
+        control_layout = QHBoxLayout()
+        
+        # Выбор листа
+        control_layout.addWidget(QLabel("Лист:"))
+        self.sheet_combo = QComboBox()
+        self.sheet_combo.currentTextChanged.connect(self.show_data)
+        control_layout.addWidget(self.sheet_combo)
+        
+        # Кнопки управления
+        self.delete_btn = QPushButton("Удалить выбранные записи")
+        self.delete_btn.clicked.connect(self.delete_selected_entries)
+        self.delete_btn.setStyleSheet("QPushButton { background-color: #ff6b6b; color: black; }")
+        control_layout.addWidget(self.delete_btn)
+        
+        self.select_all_btn = QPushButton("Выбрать все")
+        self.select_all_btn.clicked.connect(self.select_all_entries)
+        control_layout.addWidget(self.select_all_btn)
+        
+        self.deselect_all_btn = QPushButton("Снять выделение")
+        self.deselect_all_btn.clicked.connect(self.deselect_all_entries)
+        control_layout.addWidget(self.deselect_all_btn)
+        
+        control_layout.addStretch()
+        layout.addLayout(control_layout)
+        
+        # Информация о выборе
+        self.selection_info = QLabel("Выбрано записей: 0")
+        self.selection_info.setStyleSheet("color: green; font-weight: bold;")
+        layout.addWidget(self.selection_info)
+        
+        # Таблица
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        headers = ["Число", "Дисциплина", "Группа", "Нагрузка", "Лекции", "Практические", "Лабораторные"]
+        self.table.setHorizontalHeaderLabels(headers)
+        
+        # Настройка таблицы
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        
+        # Автоматическое растягивание колонок
+        header = self.table.horizontalHeader()
+        header.setSectionResizeMode(QHeaderView.Stretch)
+        
+        # Обработчик выбора
+        self.table.itemSelectionChanged.connect(self.on_table_selection_changed)
+        
+        layout.addWidget(self.table, 1)
+        group.setLayout(layout)
+        return group
+
+    # МЕТОДЫ ЛОГИКИ
+    def date_to_datetime(self, date_obj):
+        if isinstance(date_obj, QDate):
+            return datetime(date_obj.year(), date_obj.month(), date_obj.day())
+        return date_obj
+
+    def determine_week_type(self, input_date):
+        current_date = self.date_to_datetime(input_date)
+        year = current_date.year
+        
+        september_1 = datetime(year, 9, 1)
+        if current_date < september_1:
+            september_1 = datetime(year-1, 9, 1)
+        
+        days_diff = (current_date - september_1).days
+        return "числитель" if (days_diff // 7) % 2 == 0 else "знаменатель"
+
+    def find_sheet_for_month(self, month):
+        month_names = {1: "01", 2: "02", 3: "03", 4: "04", 5: "05", 6: "06",
+                      7: "07", 8: "08", 9: "09", 10: "10", 11: "11", 12: "12"}
+        
+        target_month = month_names.get(month)
+        if not target_month:
+            return None
+        
+        for sheet_name in self.wb.sheetnames:
+            if re.search(r'\b' + re.escape(target_month) + r'\b', sheet_name):
+                return sheet_name
+        
+        return None
+
+    def generate_dates_by_period(self):
+        try:
+            start_dt = self.date_to_datetime(self.start_date.date())
+            end_dt = self.date_to_datetime(self.end_date.date())
+            target_week_type = self.week_type_combo.currentText()
+            
+            if start_dt >= end_dt:
+                QMessageBox.critical(self, "Ошибка", "Дата начала должна быть раньше даты окончания")
+                return
+            
+            self.selected_dates.clear()
+            generated_count = 0
+            
+            if target_week_type == "обе недели":
+                current_date = start_dt
+                while current_date <= end_dt:
+                    sheet_name = self.find_sheet_for_month(current_date.month)
+                    if sheet_name:
+                        self.selected_dates.append({
+                            'date': current_date, 'day': current_date.day, 'month': current_date.month,
+                            'year': current_date.year, 'sheet': sheet_name,
+                            'week_type': self.determine_week_type(current_date)
+                        })
+                        generated_count += 1
+                    current_date += timedelta(days=7)
+            else:
+                current_date = start_dt
+                while current_date <= end_dt:
+                    week_type = self.determine_week_type(current_date)
+                    if week_type == target_week_type:
+                        sheet_name = self.find_sheet_for_month(current_date.month)
+                        if sheet_name:
+                            self.selected_dates.append({
+                                'date': current_date, 'day': current_date.day, 'month': current_date.month,
+                                'year': current_date.year, 'sheet': sheet_name, 'week_type': week_type
+                            })
+                            generated_count += 1
+                        current_date += timedelta(days=7)
+                    else:
+                        current_date += timedelta(days=1)
+            
+            self.selected_dates.sort(key=lambda x: (x['month'], x['day']))
+            self.update_dates_info()
+            self.update_dates_display()
+            
+            if generated_count > 0:
+                dates_list = ", ".join([f"{date['day']}.{date['month']:02d}" for date in self.selected_dates])
+                week_type_display = "числитель и знаменатель (каждую неделю)" if target_week_type == "обе недели" else target_week_type
+                
+                QMessageBox.information(self, "Успех", 
+                    f"Сгенерировано {generated_count} дат\n"
+                    f"Период: {start_dt.strftime('%d.%m.%Y')} - {end_dt.strftime('%d.%m.%Y')}\n"
+                    f"Тип недели: {week_type_display}\n"
+                    f"Даты: {dates_list}")
+            else:
+                QMessageBox.warning(self, "Внимание", "В выбранном периоде нет дат")
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка генерации дат: {e}")
+
+    def add_single_date(self):
+        try:
+            date_obj = self.date_to_datetime(self.single_date.date())
+            sheet_name = self.find_sheet_for_month(date_obj.month)
+            
+            if not sheet_name:
+                QMessageBox.critical(self, "Ошибка", f"Не найден лист для месяца {date_obj.month}")
+                return
+            
+            # Проверяем, нет ли уже этой даты в списке
+            for existing_date in self.selected_dates:
+                if (existing_date['day'] == date_obj.day and 
+                    existing_date['month'] == date_obj.month and 
+                    existing_date['year'] == date_obj.year):
+                    QMessageBox.warning(self, "Внимание", "Эта дата уже есть в списке")
+                    return
+            
+            date_info = {
+                'date': date_obj, 
+                'day': date_obj.day, 
+                'month': date_obj.month,
+                'year': date_obj.year, 
+                'sheet': sheet_name,
+                'week_type': self.determine_week_type(date_obj)
+            }
+            
+            self.selected_dates.append(date_info)
+            self.selected_dates.sort(key=lambda x: (x['month'], x['day']))
+            
+            self.update_dates_info()
+            self.update_dates_display()
+            
+            QMessageBox.information(self, "Успех", f"Дата {date_obj.strftime('%d.%m.%Y')} добавлена")
+            
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка добавления даты: {e}")
+
+    def remove_selected_date(self):
+        selected_index = self.remove_date_combo.currentIndex()
+        if selected_index == -1:
+            QMessageBox.warning(self, "Внимание", "Выберите дату для удаления")
+            return
+        
+        if 0 <= selected_index < len(self.selected_dates):
+            removed_date = self.selected_dates.pop(selected_index)
+            self.update_dates_info()
+            self.update_dates_display()
+            QMessageBox.information(self, "Успех", f"Дата {removed_date['day']}.{removed_date['month']:02d}.{removed_date['year']} удалена")
+
+    def clear_dates(self):
+        self.selected_dates.clear()
+        self.update_dates_info()
+        self.update_dates_display()
+        QMessageBox.information(self, "Успех", "Все даты очищены")
+
+    def update_dates_display(self):
+        # Обновляем список дат в ListWidget
+        self.dates_list.clear()
+        for date_info in self.selected_dates:
+            display_text = f"{date_info['day']:02d}.{date_info['month']:02d}.{date_info['year']} ({date_info['sheet']}, {date_info['week_type']})"
+            self.dates_list.addItem(display_text)
+        
+        # Обновляем комбобокс для удаления
+        date_values = [f"{date_info['day']:02d}.{date_info['month']:02d}.{date_info['year']}" for date_info in self.selected_dates]
+        self.remove_date_combo.clear()
+        self.remove_date_combo.addItems(date_values)
+
+    def update_dates_info(self):
+        count = len(self.selected_dates)
+        if count > 0:
+            dates_str = ", ".join([f"{date['day']}.{date['month']:02d}" for date in self.selected_dates])
+            sheets_count = {}
+            for date in self.selected_dates:
+                sheets_count[date['sheet']] = sheets_count.get(date['sheet'], 0) + 1
+            
+            sheets_info = ", ".join([f"{sheet}: {count}" for sheet, count in sheets_count.items()])
+            week_types = set(date['week_type'] for date in self.selected_dates)
+            week_types_info = f"Типы: {', '.join(week_types)}" if week_types else ""
+            
+            self.dates_info_label.setText(f"Выбрано дат: {count} | Даты: {dates_str} | Листы: {sheets_info} {week_types_info}")
+        else:
+            self.dates_info_label.setText("Выбрано дат: 0")
+
     def load_workbook(self):
-        """Загрузка файла Excel"""
         try:
             self.wb = openpyxl.load_workbook(self.filename)
-            print(f"Файл '{self.filename}' успешно загружен")
-        except FileNotFoundError:
-            print(f"Файл '{self.filename}' не найден.")
-            return False
-        return True
-    
-    def get_available_sheets(self):
-        """Получить список доступных листов"""
-        return self.wb.sheetnames if self.wb else []
-    
-    def get_existing_days(self, sheet):
-        """Получить список существующих чисел и их строк"""
-        days_data = []
-        row = self.START_ROW
-        
-        while sheet[f'E{row}'].value is not None:
-            day_number = sheet[f'E{row}'].value
-            if isinstance(day_number, (int, float)):
-                days_data.append({
-                    'row': row,
-                    'day': int(day_number),
-                    'discipline': sheet[f'F{row}'].value,
-                    'group': sheet[f'G{row}'].value,
-                    'load_type': sheet[f'H{row}'].value
-                })
-            row += 1
-        
-        # Сортируем по числам
-        days_data.sort(key=lambda x: x['day'])
-        return days_data
-    
-    def find_insert_position(self, sheet, new_day):
-        """Найти позицию для вставки нового числа (с сохранением сортировки)"""
-        existing_days = self.get_existing_days(sheet)
-        
-        if not existing_days:
-            return self.START_ROW  # Первая запись
-        
-        # Проверяем, существует ли уже такое число
-        for day_data in existing_days:
-            if day_data['day'] == new_day:
-                return day_data['row']  # Заменяем существующую запись
-        
-        # Ищем позицию для вставки
-        for i, day_data in enumerate(existing_days):
-            if new_day < day_data['day']:
-                # Вставляем перед текущим элементом
-                if i == 0:
-                    return self.START_ROW
-                else:
-                    return existing_days[i-1]['row'] + 1
-        
-        # Если число больше всех существующих, вставляем в конец
-        return existing_days[-1]['row'] + 1
-    
-    def insert_sorted_entry(self, sheet, insert_row, schedule_data):
-        """Вставить запись в указанную строку, сдвигая существующие данные вниз"""
-        # Получаем все данные ниже точки вставки
-        existing_data = []
-        row = insert_row
-        
-        # Собираем все существующие данные начиная с строки вставки
-        while sheet[f'E{row}'].value is not None:
-            existing_data.append({
-                'day': sheet[f'E{row}'].value,
-                'discipline': sheet[f'F{row}'].value,
-                'group': sheet[f'G{row}'].value,
-                'load_type': sheet[f'H{row}'].value
-            })
-            # Очищаем ячейки для сдвига
-            sheet[f'E{row}'] = None
-            sheet[f'F{row}'] = None
-            sheet[f'G{row}'] = None
-            sheet[f'H{row}'] = None
-            row += 1
-        
-        # Вставляем новую запись
-        sheet[f'E{insert_row}'] = schedule_data['day_number']
-        sheet[f'F{insert_row}'] = schedule_data['discipline']
-        sheet[f'G{insert_row}'] = schedule_data['group']
-        sheet[f'H{insert_row}'] = schedule_data['load_type']
-        
-        # Восстанавливаем сдвинутые данные
-        current_row = insert_row + 1
-        for data in existing_data:
-            sheet[f'E{current_row}'] = data['day']
-            sheet[f'F{current_row}'] = data['discipline']
-            sheet[f'G{current_row}'] = data['group']
-            sheet[f'H{current_row}'] = data['load_type']
-            current_row += 1
-        
-        return insert_row
-    
-    def add_schedule_entry(self, month, schedule_data):
-        """
-        Добавление записи расписания с автоматической сортировкой по числам
-        """
-        if not self.wb or month not in self.wb.sheetnames:
-            print(f"Лист '{month}' не найден!")
-            return False
-        
-        sheet = self.wb[month]
-        
-        try:
-            # Находим позицию для вставки с учетом сортировки
-            insert_row = self.find_insert_position(sheet, schedule_data['day_number'])
-            
-            # Вставляем запись
-            result_row = self.insert_sorted_entry(sheet, insert_row, schedule_data)
-            
-            print(f"Запись добавлена на лист '{month}':")
-            print(f"  Строка {result_row}:")
-            print(f"    E: {schedule_data['day_number']} (число)")
-            print(f"    F: {schedule_data['discipline']} (дисциплина)")
-            print(f"    G: {schedule_data['group']} (группа)")
-            print(f"    H: {schedule_data['load_type']} (нагрузка)")
-            return True
-            
+            sheets = self.wb.sheetnames
+            self.sheet_combo.clear()
+            self.sheet_combo.addItems(sheets)
+            if sheets:
+                self.sheet_combo.setCurrentIndex(0)
+            self.show_data()
         except Exception as e:
-            print(f"Ошибка при добавлении записи: {e}")
-            return False
-    
-    def add_multiple_entries(self, entries_list):
-        """Добавление нескольких записей"""
+            QMessageBox.critical(self, "Ошибка", f"Ошибка загрузки: {e}")
+
+    def show_data(self):
         if not self.wb:
-            print("Файл не загружен!")
-            return 0
-            
-        success_count = 0
-        for entry in entries_list:
-            if self.add_schedule_entry(entry['month'], entry['schedule_data']):
-                success_count += 1
+            return
         
-        print(f"Успешно добавлено {success_count} из {len(entries_list)} записей")
-        return success_count
-    
-    def save_workbook(self):
-        """Сохранение файла"""
-        if not self.wb:
-            print("Файл не загружен для сохранения!")
-            return False
+        sheet_name = self.sheet_combo.currentText()
+        if sheet_name and sheet_name in self.wb.sheetnames:
+            self.table.setRowCount(0)
             
+            try:
+                sheet = self.wb[sheet_name]
+                row = self.START_ROW
+                data_rows = []
+                
+                while sheet[f'E{row}'].value is not None:
+                    day = sheet[f'E{row}'].value
+                    if isinstance(day, (int, float)):
+                        data_rows.append((
+                            int(day),
+                            sheet[f'F{row}'].value or '',
+                            sheet[f'G{row}'].value or '',
+                            sheet[f'H{row}'].value or '',
+                            sheet.cell(row=row, column=12).value or '',
+                            sheet.cell(row=row, column=13).value or '',
+                            sheet.cell(row=row, column=14).value or ''
+                        ))
+                    row += 1
+                
+                # Заполняем таблицу
+                self.table.setRowCount(len(data_rows))
+                for row_idx, row_data in enumerate(data_rows):
+                    for col_idx, value in enumerate(row_data):
+                        item = QTableWidgetItem(str(value))
+                        self.table.setItem(row_idx, col_idx, item)
+                
+                # Сбрасываем счетчик выбранных записей
+                self.selection_info.setText("Выбрано записей: 0")
+                
+            except Exception as e:
+                QMessageBox.critical(self, "Ошибка", f"Ошибка данных: {e}")
+
+    def on_table_selection_changed(self):
+        """Обновляет информацию о количестве выбранных записей"""
+        selected_count = len(self.table.selectedItems()) // self.table.columnCount()
+        self.selection_info.setText(f"Выбрано записей: {selected_count}")
+
+    def select_all_entries(self):
+        """Выбирает все записи в таблице"""
+        self.table.selectAll()
+
+    def deselect_all_entries(self):
+        """Снимает выделение со всех записей"""
+        self.table.clearSelection()
+
+    def delete_selected_entries(self):
+        """Удаляет выбранные записи из таблицы и файла Excel"""
+        selected_ranges = self.table.selectedRanges()
+        if not selected_ranges:
+            QMessageBox.warning(self, "Внимание", "Выберите записи для удаления")
+            return
+        
+        # Получаем индексы выбранных строк
+        rows_to_delete = set()
+        for range in selected_ranges:
+            for row in range(range.topRow(), range.bottomRow() + 1):
+                rows_to_delete.add(row)
+        
+        if not rows_to_delete:
+            return
+        
+        # Подтверждение удаления
+        confirm = QMessageBox.question(
+            self, 
+            "Подтверждение удаления", 
+            f"Вы действительно хотите удалить {len(rows_to_delete)} записей?\nЭто действие нельзя отменить.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        
+        if confirm != QMessageBox.Yes:
+            return
+        
         try:
+            sheet_name = self.sheet_combo.currentText()
+            if sheet_name not in self.wb.sheetnames:
+                QMessageBox.critical(self, "Ошибка", "Лист не найден")
+                return
+            
+            sheet = self.wb[sheet_name]
+            deleted_count = 0
+            
+            # Собираем данные выбранных строк для поиска в Excel
+            entries_to_delete = []
+            for row in sorted(rows_to_delete, reverse=True):
+                if row < self.table.rowCount():
+                    day_item = self.table.item(row, 0)
+                    discipline_item = self.table.item(row, 1)
+                    group_item = self.table.item(row, 2)
+                    
+                    if day_item and discipline_item and group_item:
+                        entries_to_delete.append({
+                            'row': row,
+                            'day': int(day_item.text()),
+                            'discipline': discipline_item.text(),
+                            'group': group_item.text()
+                        })
+            
+            # Удаляем из Excel
+            for entry in entries_to_delete:
+                excel_row = self.START_ROW
+                found = False
+                
+                while sheet[f'E{excel_row}'].value is not None and not found:
+                    sheet_day = sheet[f'E{excel_row}'].value
+                    sheet_discipline = sheet[f'F{excel_row}'].value or ''
+                    sheet_group = sheet[f'G{excel_row}'].value or ''
+                    
+                    if (isinstance(sheet_day, (int, float)) and int(sheet_day) == entry['day'] and
+                        sheet_discipline == entry['discipline'] and sheet_group == entry['group']):
+                        
+                        self.delete_excel_row(sheet, excel_row)
+                        deleted_count += 1
+                        found = True
+                    
+                    excel_row += 1
+            
+            # Сохраняем файл
             self.wb.save(self.filename)
-            print(f"Файл '{self.filename}' успешно сохранен")
-            return True
+            
+            # Обновляем отображение
+            self.show_data()
+            
+            QMessageBox.information(self, "Успех", f"Удалено записей: {deleted_count}")
+            
         except Exception as e:
-            print(f"Ошибка при сохранении: {e}")
-            return False
-    
-    def show_current_data(self, month):
-        """Показать текущие данные на листе"""
-        if not self.wb or month not in self.wb.sheetnames:
-            print(f"Лист '{month}' не найден!")
-            return
-        
-        sheet = self.wb[month]
-        existing_days = self.get_existing_days(sheet)
-        
-        print(f"\nТекущие данные на листе '{month}':")
-        print("-" * 80)
-        print("Строка | Число (E) | Дисциплина (F) | Группа (G) | Нагрузка (H)")
-        print("-" * 80)
-        
-        if not existing_days:
-            print("Нет данных")
-            return
-        
-        for day_data in existing_days:
-            print(f"{day_data['row']:6} | {day_data['day']:9} | {day_data['discipline']:13} | {day_data['group']:10} | {day_data['load_type']}")
+            QMessageBox.critical(self, "Ошибка", f"Ошибка при удалении записей: {e}")
 
-def validate_day_number(day, month=None):
-    """Проверка корректности числа месяца"""
-    try:
-        day_int = int(day)
-        if day_int < 1 or day_int > 31:
-            return False, "Число должно быть в диапазоне от 1 до 31"
+    def delete_excel_row(self, sheet, row_num):
+        """Удаляет строку из листа Excel и сдвигает остальные строки вверх"""
+        max_row = self.START_ROW
+        while sheet[f'E{max_row}'].value is not None:
+            max_row += 1
         
-        # Дополнительная проверка по месяцам (опционально)
-        if month:
-            month_days = {
-                'Январь': 31, 'Февраль': 29, 'Март': 31, 'Апрель': 30,
-                'Май': 31, 'Июнь': 30, 'Июль': 31, 'Август': 31,
-                'Сентябрь': 30, 'Октябрь': 31, 'Ноябрь': 30, 'Декабрь': 31
+        # Сдвигаем строки вверх
+        for row in range(row_num, max_row):
+            # Копируем значения из следующей строки
+            sheet[f'E{row}'] = sheet[f'E{row + 1}'].value
+            sheet[f'F{row}'] = sheet[f'F{row + 1}'].value
+            sheet[f'G{row}'] = sheet[f'G{row + 1}'].value
+            sheet[f'H{row}'] = sheet[f'H{row + 1}'].value
+            sheet.cell(row=row, column=12).value = sheet.cell(row=row + 1, column=12).value
+            sheet.cell(row=row, column=13).value = sheet.cell(row=row + 1, column=13).value
+            sheet.cell(row=row, column=14).value = sheet.cell(row=row + 1, column=14).value
+        
+        # Очищаем последнюю строку
+        sheet[f'E{max_row}'] = None
+        sheet[f'F{max_row}'] = None
+        sheet[f'G{max_row}'] = None
+        sheet[f'H{max_row}'] = None
+        sheet.cell(row=max_row, column=12).value = None
+        sheet.cell(row=max_row, column=13).value = None
+        sheet.cell(row=max_row, column=14).value = None
+
+    def add_entries(self):
+        if not all([self.wb, self.selected_dates, self.discipline_edit.text(), 
+                   self.group_edit.text(), self.load_type_combo.currentText()]):
+            QMessageBox.critical(self, "Ошибка", "Заполните все поля и сгенерируйте даты")
+            return
+        
+        try:
+            data = {
+                'discipline': self.discipline_edit.text(),
+                'group': self.group_edit.text(),
+                'load_type': self.load_type_combo.currentText(),
+                'lecture': float(self.lecture_edit.text()) if self.lecture_edit.text() else None,
+                'practice': float(self.practice_edit.text()) if self.practice_edit.text() else None,
+                'lab': float(self.lab_edit.text()) if self.lab_edit.text() else None
             }
-            max_days = month_days.get(month, 31)
-            if day_int > max_days:
-                return False, f"В месяце '{month}' не может быть {day_int} числа"
-        
-        return True, day_int
-    except ValueError:
-        return False, "Введите корректное число"
+            
+            dates_by_sheet = {}
+            for date_info in self.selected_dates:
+                sheet_name = date_info['sheet']
+                if sheet_name not in dates_by_sheet:
+                    dates_by_sheet[sheet_name] = []
+                dates_by_sheet[sheet_name].append(date_info)
+            
+            results = {}
+            for sheet_name, dates in dates_by_sheet.items():
+                sheet = self.wb[sheet_name]
+                dates.sort(key=lambda x: x['day'])
+                
+                added_rows = []
+                for date_info in dates:
+                    row = self.add_entry_to_sheet(sheet, date_info['day'], data)
+                    added_rows.append(f"{date_info['day']}.{date_info['month']:02d}(стр.{row})")
+                
+                results[sheet_name] = added_rows
+            
+            self.wb.save(self.filename)
+            self.show_data()
+            
+            msg_lines = ["Записи добавлены:"]
+            for sheet_name, dates in results.items():
+                msg_lines.append(f"{sheet_name}: {', '.join(dates)}")
+            
+            QMessageBox.information(self, "Успех", "\n".join(msg_lines))
+            
+            # Очищаем поля ввода
+            self.discipline_edit.clear()
+            self.group_edit.clear()
+            self.lecture_edit.clear()
+            self.practice_edit.clear()
+            self.lab_edit.clear()
+            self.load_type_combo.setCurrentIndex(0)
+                
+        except Exception as e:
+            QMessageBox.critical(self, "Ошибка", f"Ошибка: {e}")
 
-def main():
-    # Инициализация
-    journal = JournalFiller("ПРимер.xlsx")
-    
-    if not journal.wb:
-        print("Не удалось загрузить файл. Программа завершена.")
-        return
-    
-    while True:
-        print("\n" + "="*60)
-        print("ЖУРНАЛ ПРЕПОДАВАТЕЛЯ - ЗАПОЛНЕНИЕ РАСПИСАНИЯ")
-        print("="*60)
-        print("Доступные листы:", ", ".join(journal.get_available_sheets()))
-        print(f"Заполнение начинается с позиции: E{journal.START_ROW}")
-        print("\nФормат заполнения:")
-        print("  E - число месяца | F - дисциплина | G - группа | H - вид нагрузки")
-        print("\nОсобенности:")
-        print("  • Числа автоматически сортируются по возрастанию")
-        print("  • При добавлении существующего числа запись заменяется")
-        print("  • Проверка корректности чисел (1-31)")
-        print("\n1. Добавить запись расписания")
-        print("2. Добавить несколько записей")
-        print("3. Показать текущие данные")
-        print("4. Сохранить и выйти")
-        print("5. Выйти без сохранения")
+    def add_entry_to_sheet(self, sheet, day, data):
+        last_row = self.START_ROW
+        while sheet[f'E{last_row}'].value is not None:
+            last_row += 1
         
-        choice = input("\nВыберите действие (1-5): ").strip()
-        
-        if choice == '1':
-            add_single_entry(journal)
-        elif choice == '2':
-            add_multiple_entries_interactive(journal)
-        elif choice == '3':
-            month = input("Введите название листа для просмотра: ").strip()
-            journal.show_current_data(month)
-        elif choice == '4':
-            if journal.save_workbook():
-                print("До свидания!")
-                break
-        elif choice == '5':
-            print("Изменения не сохранены. До свидания!")
-            break
-        else:
-            print("Неверный выбор!")
-
-def add_single_entry(journal):
-    """Добавление одной записи через интерфейс"""
-    print("\n--- ДОБАВЛЕНИЕ ЗАПИСИ РАСПИСАНИЯ ---")
-    
-    month = input("Введите месяц (название листа): ").strip()
-    
-    # Проверка числа месяца
-    while True:
-        day_input = input("Число месяца (1-31): ").strip()
-        is_valid, day_result = validate_day_number(day_input, month)
-        if is_valid:
-            day_number = day_result
-            break
-        else:
-            print(f"Ошибка: {day_result}")
-    
-    discipline = input("Дисциплина: ").strip()
-    group = input("Группа (например: 606-41 (АСОИУ-24-1)): ").strip()
-    load_type = input("Вид нагрузки (осн./совм./почас.): ").strip()
-    
-    schedule_data = {
-        'day_number': day_number,
-        'discipline': discipline,
-        'group': group,
-        'load_type': load_type
-    }
-    
-    if journal.add_schedule_entry(month, schedule_data):
-        save_now = input("Сохранить файл сейчас? (да/нет): ").strip().lower()
-        if save_now == 'да':
-            journal.save_workbook()
-
-def add_multiple_entries_interactive(journal):
-    """Добавление нескольких записей через интерфейс"""
-    entries = []
-    
-    print("\n--- ДОБАВЛЕНИЕ НЕСКОЛЬКИХ ЗАПИСЕЙ ---")
-    print("Вводите данные для каждой записи. Для завершения введите 'готово' в поле месяца.")
-    
-    while True:
-        month = input("\nМесяц (или 'готово' для завершения): ").strip()
-        if month.lower() == 'готово':
-            break
-        
-        # Проверка числа месяца
-        while True:
-            day_input = input("Число месяца (1-31): ").strip()
-            is_valid, day_result = validate_day_number(day_input, month)
-            if is_valid:
-                day_number = day_result
-                break
-            else:
-                print(f"Ошибка: {day_result}")
-        
-        discipline = input("Дисциплина: ").strip()
-        group = input("Группа: ").strip()
-        load_type = input("Вид нагрузки (осн./совм./почас.): ").strip()
-        
-        schedule_data = {
-            'day_number': day_number,
-            'discipline': discipline,
-            'group': group,
-            'load_type': load_type
-        }
-        
-        entries.append({
-            'month': month,
-            'schedule_data': schedule_data
-        })
-        
-        more = input("Добавить еще одну запись для этого месяца? (да/нет): ").strip().lower()
-        if more != 'да':
-            break
-    
-    if entries:
-        journal.add_multiple_entries(entries)
-        save = input("Сохранить файл? (да/нет): ").strip().lower()
-        if save == 'да':
-            journal.save_workbook()
-
-# Демонстрация работы сортировки
-def demo_sorted_fill():
-    """Демонстрация работы с сортировкой"""
-    try:
-        wb = openpyxl.load_workbook("ПРимер.xlsx")
-        sheet = wb['Сентябрь']
-        
-        # Очищаем старые данные для демонстрации
-        for row in range(7, 20):
-            sheet[f'E{row}'] = None
-            sheet[f'F{row}'] = None
-            sheet[f'G{row}'] = None
-            sheet[f'H{row}'] = None
-        
-        # Данные вразнобой для демонстрации сортировки
-        demo_data = [
-            [15, "Математический анализ", "606-41", "совм."],
-            [3, "Физика", "607-42", "осн."],
-            [25, "Информатика", "608-43", "совм."],
-            [8, "Программирование", "609-44", "почас."],
-            [1, "Химия", "610-45", "осн."],
-        ]
-        
-        print("Демонстрация автоматической сортировки:")
-        print("Исходный порядок:", [data[0] for data in demo_data])
-        
-        for data in demo_data:
-            # Находим позицию для вставки
-            row = 7
-            existing_days = []
-            while sheet[f'E{row}'].value is not None:
-                existing_days.append(sheet[f'E{row}'].value)
-                row += 1
-            
-            # Простая вставка для демонстрации
-            insert_row = 7
-            for i, existing_day in enumerate(existing_days):
-                if data[0] < existing_day:
-                    break
-                insert_row = 8 + i
-            
-            # Сдвигаем и вставляем
-            temp_data = []
-            current_row = insert_row
-            while sheet[f'E{current_row}'].value is not None:
-                temp_data.append([
-                    sheet[f'E{current_row}'].value,
-                    sheet[f'F{current_row}'].value,
-                    sheet[f'G{current_row}'].value,
-                    sheet[f'H{current_row}'].value
-                ])
-                current_row += 1
-            
-            # Вставляем новую запись
-            sheet[f'E{insert_row}'] = data[0]
-            sheet[f'F{insert_row}'] = data[1]
-            sheet[f'G{insert_row}'] = data[2]
-            sheet[f'H{insert_row}'] = data[3]
-            
-            # Восстанавливаем сдвинутые данные
-            for i, temp in enumerate(temp_data):
-                sheet[f'E{insert_row + 1 + i}'] = temp[0]
-                sheet[f'F{insert_row + 1 + i}'] = temp[1]
-                sheet[f'G{insert_row + 1 + i}'] = temp[2]
-                sheet[f'H{insert_row + 1 + i}'] = temp[3]
-            
-            print(f"Добавлено число {data[0]} в строку {insert_row}")
-        
-        # Показываем результат
-        print("\nРезультат после сортировки:")
-        row = 7
+        existing_date_rows = []
+        row = self.START_ROW
         while sheet[f'E{row}'].value is not None:
-            print(f"Строка {row}: {sheet[f'E{row}'].value} - {sheet[f'F{row}'].value}")
+            existing_day = sheet[f'E{row}'].value
+            if isinstance(existing_day, (int, float)) and int(existing_day) == day:
+                existing_date_rows.append(row)
             row += 1
         
-        wb.save("ПРимер_с_сортировкой.xlsx")
-        print("\nФайл сохранен как 'ПРимер_с_сортировкой.xlsx'")
+        if existing_date_rows:
+            last_date_row = max(existing_date_rows)
+            insert_row = last_date_row + 1
+            self.shift_rows_down(sheet, insert_row, last_row)
+            self.fill_row_data(sheet, insert_row, day, data)
+            return insert_row
+        else:
+            return self.insert_entry_sorted(sheet, day, data, last_row)
+
+    def shift_rows_down(self, sheet, start_row, last_row):
+        for row in range(last_row, start_row - 1, -1):
+            sheet[f'E{row+1}'] = sheet[f'E{row}'].value
+            sheet[f'F{row+1}'] = sheet[f'F{row}'].value
+            sheet[f'G{row+1}'] = sheet[f'G{row}'].value
+            sheet[f'H{row+1}'] = sheet[f'H{row}'].value
+            sheet.cell(row=row+1, column=12).value = sheet.cell(row=row, column=12).value
+            sheet.cell(row=row+1, column=13).value = sheet.cell(row=row, column=13).value
+            sheet.cell(row=row+1, column=14).value = sheet.cell(row=row, column=14).value
+
+    def insert_entry_sorted(self, sheet, day, data, last_row):
+        insert_row = self.START_ROW
+        while sheet[f'E{insert_row}'].value is not None:
+            existing_day = sheet[f'E{insert_row}'].value
+            if isinstance(existing_day, (int, float)) and int(existing_day) > day:
+                break
+            insert_row += 1
         
-    except Exception as e:
-        print(f"Ошибка: {e}")
+        self.shift_rows_down(sheet, insert_row, last_row)
+        self.fill_row_data(sheet, insert_row, day, data)
+        return insert_row
+
+    def fill_row_data(self, sheet, row, day, data):
+        sheet[f'E{row}'] = day
+        sheet[f'F{row}'] = data['discipline']
+        sheet[f'G{row}'] = data['group']
+        sheet[f'H{row}'] = data['load_type']
+        sheet.cell(row=row, column=12).value = data['lecture']
+        sheet.cell(row=row, column=13).value = data['practice']
+        sheet.cell(row=row, column=14).value = data['lab']
 
 if __name__ == "__main__":
-    print("Программа для заполнения журнала преподавателя")
-    print("Заполнение начинается с позиции: E7")
-    print("\nФормат заполнения:")
-    print("  E - число месяца | F - дисциплина | G - группа | H - вид нагрузки")
-    print("\n1. Интерактивный режим (с сортировкой)")
-    print("2. Демонстрация сортировки")
+    app = QApplication(sys.argv)
     
-    choice = input("Выберите режим (1/2): ").strip()
+    # Установка стиля для лучшего внешнего вида на Mac
+    app.setStyle('Fusion')
     
-    if choice == '1':
-        main()
-    elif choice == '2':
-        demo_sorted_fill()
-    else:
-        print("Запуск интерактивного режима...")
-        main()
+    window = JournalApp("Тетрадь_ППС_2025_2026_каф_NN_Фамилия_ИО_оч_заоч.xltx")
+    window.show()
+    
+    sys.exit(app.exec())
