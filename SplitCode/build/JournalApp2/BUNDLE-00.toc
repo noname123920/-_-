@@ -1,0 +1,3 @@
+([('JournalApp2',
+   '/Users/Eduard/Documents/-_-/SplitCode/dist/JournalApp2',
+   'EXECUTABLE')],)

@@ -4,7 +4,10 @@ from tkinter import ttk, messagebox
 from tkcalendar import Calendar, DateEntry
 from datetime import datetime, timedelta, date
 import re
-from PIL import Image, ImageTk  # Добавляем импорт для работы с изображениями
+from PIL import Image, ImageTk
+from openpyxl.styles import Alignment
+import os
+import time
 
 class JournalApp:
     def __init__(self, filename):
@@ -21,7 +24,10 @@ class JournalApp:
     def setup_gui(self):
         self.root = tk.Tk()
         self.root.title("Журнал преподавателя")
-        self.root.geometry("1000x900")  # Увеличил ширину для размещения GIF
+        self.root.geometry("1000x900")
+        
+        # Обработчик закрытия окна
+        self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
@@ -46,6 +52,66 @@ class JournalApp:
         
         # Настройка растягивания
         self.configure_grid(main_frame, view_frame)
+    
+    def on_closing(self):
+        """Обработчик закрытия приложения"""
+        self.close_workbook()
+        self.root.destroy()
+    
+    def close_workbook(self):
+        """Безопасное закрытие рабочей книги"""
+        try:
+            if hasattr(self, 'wb') and self.wb:
+                self.wb.close()
+                self.wb = None
+        except Exception as e:
+            print(f"Ошибка при закрытии файла: {e}")
+    
+    def safe_save_workbook(self):
+        """Безопасное сохранение рабочей книги с повторными попытками"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if self.wb:
+                    self.wb.save(self.filename)
+                    return True
+            except PermissionError:
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)  # Ждем 0.5 секунды перед повторной попыткой
+                    continue
+                else:
+                    messagebox.showerror("Ошибка", 
+                        f"Нет доступа к файлу {self.filename}!\n"
+                        f"Убедитесь, что файл не открыт в другой программе.")
+                    return False
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Ошибка сохранения файла: {e}")
+                return False
+        return False
+    
+    def safe_load_workbook(self):
+        """Безопасная загрузка рабочей книги с повторными попытками"""
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                if os.path.exists(self.filename):
+                    return openpyxl.load_workbook(self.filename)
+                else:
+                    messagebox.showerror("Ошибка", f"Файл {self.filename} не найден")
+                    return None
+            except PermissionError:
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)
+                    continue
+                else:
+                    messagebox.showerror("Ошибка", 
+                        f"Нет доступа к файлу {self.filename}!\n"
+                        f"Убедитесь, что файл не открыт в другой программе.")
+                    return None
+            except Exception as e:
+                messagebox.showerror("Ошибка", f"Ошибка загрузки файла: {e}")
+                return None
+        return None
     
     def create_period_frame(self, parent):
         frame = ttk.LabelFrame(parent, text="Выбор периода", padding="10")
@@ -142,53 +208,50 @@ class JournalApp:
     def load_and_display_gif(self, parent):
         """Загружает и отображает GIF изображение"""
         try:
-            # Пытаемся загрузить GIF
-            self.gif_image = Image.open("Без названия.gif")
-            
-            # Конвертируем в формат, понятный Tkinter
-            self.gif_frames = []
-            try:
-                # Для анимированных GIF
-                while True:
-                    frame = self.gif_image.copy()
-                    # Масштабируем изображение (можно настроить размер)
-                    frame = frame.resize((250, 250), Image.Resampling.LANCZOS)
-                    self.gif_frames.append(ImageTk.PhotoImage(frame))
-                    self.gif_image.seek(len(self.gif_frames))
-            except EOFError:
-                # Достигнут конец GIF
-                pass
+            gif_path = "Без названия.gif"
+            if os.path.exists(gif_path):
+                self.gif_image = Image.open(gif_path)
                 
-            # Если это не анимированный GIF, создаем один кадр
-            if not self.gif_frames:
-                frame = self.gif_image.copy()
-                frame = frame.resize((250, 250), Image.Resampling.LANCZOS)
-                self.gif_frames = [ImageTk.PhotoImage(frame)]
-            
-            # Создаем метку для отображения GIF
-            self.gif_label = ttk.Label(parent)
-            self.gif_label.grid(row=0, column=0, sticky=(tk.E, tk.N), padx=(10, 0))
-            
-            # Запускаем анимацию если есть несколько кадров
-            if len(self.gif_frames) > 1:
-                self.current_frame = 0
-                self.animate_gif()
+                self.gif_frames = []
+                try:
+                    while True:
+                        frame = self.gif_image.copy()
+                        frame = frame.resize((250, 250), Image.Resampling.LANCZOS)
+                        self.gif_frames.append(ImageTk.PhotoImage(frame))
+                        self.gif_image.seek(len(self.gif_frames))
+                except EOFError:
+                    pass
+                    
+                if not self.gif_frames:
+                    frame = self.gif_image.copy()
+                    frame = frame.resize((250, 250), Image.Resampling.LANCZOS)
+                    self.gif_frames = [ImageTk.PhotoImage(frame)]
+                
+                self.gif_label = ttk.Label(parent)
+                self.gif_label.grid(row=0, column=0, sticky=(tk.E, tk.N), padx=(10, 0))
+                
+                if len(self.gif_frames) > 1:
+                    self.current_frame = 0
+                    self.animate_gif()
+                else:
+                    self.gif_label.configure(image=self.gif_frames[0])
             else:
-                self.gif_label.configure(image=self.gif_frames[0])
+                error_label = ttk.Label(parent, text="GIF не найден", foreground="red")
+                error_label.grid(row=0, column=0, sticky=(tk.E, tk.N), padx=(10, 0))
                 
         except Exception as e:
-            # Если не удалось загрузить GIF, создаем заглушку
-            print(f"Не удалось загрузить GIF: {e}")
-            error_label = ttk.Label(parent, text="GIF не найден", foreground="red")
+            error_label = ttk.Label(parent, text="Ошибка загрузки GIF", foreground="red")
             error_label.grid(row=0, column=0, sticky=(tk.E, tk.N), padx=(10, 0))
     
     def animate_gif(self):
         """Анимирует GIF изображение"""
-        if hasattr(self, 'gif_frames') and self.gif_frames:
-            self.gif_label.configure(image=self.gif_frames[self.current_frame])
-            self.current_frame = (self.current_frame + 1) % len(self.gif_frames)
-            # Обновляем каждые 100 мс (можно настроить скорость)
-            self.root.after(25, self.animate_gif)
+        if hasattr(self, 'gif_frames') and self.gif_frames and hasattr(self, 'root'):
+            try:
+                self.gif_label.configure(image=self.gif_frames[self.current_frame])
+                self.current_frame = (self.current_frame + 1) % len(self.gif_frames)
+                self.root.after(25, self.animate_gif)
+            except Exception as e:
+                print(f"Ошибка анимации GIF: {e}")
     
     def create_input_fields(self, parent):
         fields = [
@@ -299,7 +362,6 @@ class JournalApp:
             messagebox.showwarning("Внимание", "Выберите записи для удаления")
             return
         
-        # Получаем данные выбранных записей
         entries_to_delete = []
         for item in selected_items:
             item_data = self.tree.item(item, 'values')
@@ -309,7 +371,6 @@ class JournalApp:
         if not entries_to_delete:
             return
         
-        # Подтверждение удаления
         confirm = messagebox.askyesno(
             "Подтверждение удаления", 
             f"Вы действительно хотите удалить {len(entries_to_delete)} записей?\n"
@@ -320,6 +381,13 @@ class JournalApp:
             return
         
         try:
+            # Закрываем и перезагружаем workbook для гарантии свежих данных
+            self.close_workbook()
+            self.wb = self.safe_load_workbook()
+            
+            if not self.wb:
+                return
+            
             sheet_name = self.sheet_var.get()
             if sheet_name not in self.wb.sheetnames:
                 messagebox.showerror("Ошибка", "Лист не найден")
@@ -328,14 +396,12 @@ class JournalApp:
             sheet = self.wb[sheet_name]
             deleted_count = 0
             
-            # Собираем информацию о строках для удаления
             rows_to_delete = []
             for entry_data in entries_to_delete:
                 day = int(entry_data[0])
                 discipline = entry_data[1]
                 group = entry_data[2]
                 
-                # Ищем строку для удаления
                 row = self.START_ROW
                 while sheet[f'E{row}'].value is not None:
                     sheet_day = sheet[f'E{row}'].value
@@ -348,19 +414,15 @@ class JournalApp:
                         break
                     row += 1
             
-            # Удаляем строки в обратном порядке (чтобы индексы не сдвигались)
             rows_to_delete.sort(reverse=True)
             for row_num in rows_to_delete:
                 self.delete_row(sheet, row_num)
                 deleted_count += 1
             
-            # Сохраняем файл
-            self.wb.save(self.filename)
-            
-            # Обновляем отображение
-            self.show_data()
-            
-            messagebox.showinfo("Успех", f"Удалено записей: {deleted_count} из {len(entries_to_delete)}")
+            # Сохраняем и перезагружаем файл
+            if self.safe_save_workbook():
+                self.show_data()
+                messagebox.showinfo("Успех", f"Удалено записей: {deleted_count} из {len(entries_to_delete)}")
             
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при удалении записей: {e}")
@@ -371,9 +433,7 @@ class JournalApp:
         while sheet[f'E{max_row}'].value is not None:
             max_row += 1
         
-        # Сдвигаем строки вверх
         for row in range(row_num, max_row):
-            # Копируем значения из следующей строки
             sheet[f'E{row}'] = sheet[f'E{row + 1}'].value
             sheet[f'F{row}'] = sheet[f'F{row + 1}'].value
             sheet[f'G{row}'] = sheet[f'G{row + 1}'].value
@@ -488,7 +548,6 @@ class JournalApp:
                 messagebox.showerror("Ошибка", f"Не найден лист для месяца {date_obj.month}")
                 return
             
-            # Проверяем, нет ли уже этой даты в списке
             for existing_date in self.selected_dates:
                 if (existing_date['day'] == date_obj.day and 
                     existing_date['month'] == date_obj.month and 
@@ -529,13 +588,11 @@ class JournalApp:
             messagebox.showinfo("Успех", f"Дата {removed_date['day']}.{removed_date['month']:02d}.{removed_date['year']} удалена")
     
     def update_dates_display(self):
-        # Обновляем список дат в Listbox
         self.dates_listbox.delete(0, tk.END)
         for date_info in self.selected_dates:
             display_text = f"{date_info['day']:02d}.{date_info['month']:02d}.{date_info['year']} ({date_info['sheet']}, {date_info['week_type']})"
             self.dates_listbox.insert(tk.END, display_text)
         
-        # Обновляем комбобокс для удаления
         date_values = [f"{date_info['day']:02d}.{date_info['month']:02d}.{date_info['year']}" for date_info in self.selected_dates]
         self.remove_date_combo['values'] = date_values
         if date_values:
@@ -566,17 +623,20 @@ class JournalApp:
             self.dates_info_label.config(text="Выбрано дат: 0")
     
     def load_workbook(self):
+        """Загружает рабочую книгу Excel"""
         try:
-            self.wb = openpyxl.load_workbook(self.filename)
-            sheets = self.wb.sheetnames
-            self.sheet_combo['values'] = sheets
-            if sheets:
-                self.sheet_var.set(sheets[0])
-            self.show_data()
+            self.wb = self.safe_load_workbook()
+            if self.wb:
+                sheets = self.wb.sheetnames
+                self.sheet_combo['values'] = sheets
+                if sheets:
+                    self.sheet_var.set(sheets[0])
+                self.show_data()
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка загрузки: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка загрузки файла: {e}")
     
     def show_data(self, event=None):
+        """Показывает данные из выбранного листа"""
         if not self.wb:
             return
         
@@ -603,27 +663,42 @@ class JournalApp:
                         ))
                     row += 1
                     
-                # Сбрасываем счетчик выбранных записей
                 self.selection_info.config(text="Выбрано записей: 0")
                 
             except Exception as e:
-                messagebox.showerror("Ошибка", f"Ошибка данных: {e}")
+                messagebox.showerror("Ошибка", f"Ошибка при чтении данных: {e}")
     
     def add_entries(self):
+        """Добавляет записи в журнал"""
         if not all([self.wb, self.selected_dates, self.entries['discipline'].get(), 
                    self.entries['group'].get(), self.entries['load_type'].get()]):
-            messagebox.showerror("Ошибка", "Заполните все поля и сгенерируйте даты")
+            messagebox.showerror("Ошибка", "Заполните все обязательные поля и сгенерируйте даты")
             return
         
         try:
+            lecture = self.entries['lecture'].get()
+            practice = self.entries['practice'].get()
+            lab = self.entries['lab'].get()
+            
             data = {
                 'discipline': self.entries['discipline'].get(),
                 'group': self.entries['group'].get(),
                 'load_type': self.entries['load_type'].get(),
-                'lecture': float(self.entries['lecture'].get()) if self.entries['lecture'].get() else None,
-                'practice': float(self.entries['practice'].get()) if self.entries['practice'].get() else None,
-                'lab': float(self.entries['lab'].get()) if self.entries['lab'].get() else None
+                'lecture': float(lecture) if lecture else 0.0,
+                'practice': float(practice) if practice else 0.0,
+                'lab': float(lab) if lab else 0.0
             }
+            
+            if data['lecture'] == 0 and data['practice'] == 0 and data['lab'] == 0:
+                messagebox.showwarning("Внимание", "Заполните хотя бы одно поле: Лекции, Практические или Лабораторные")
+                return
+            
+            # Закрываем и перезагружаем workbook для гарантии свежих данных
+            self.close_workbook()
+            self.wb = self.safe_load_workbook()
+            
+            if not self.wb:
+                return
             
             dates_by_sheet = {}
             for date_info in self.selected_dates:
@@ -634,57 +709,165 @@ class JournalApp:
             
             results = {}
             for sheet_name, dates in dates_by_sheet.items():
+                if sheet_name not in self.wb.sheetnames:
+                    continue
+                    
                 sheet = self.wb[sheet_name]
                 dates.sort(key=lambda x: x['day'])
                 
                 added_rows = []
                 for date_info in dates:
                     row = self.add_entry_to_sheet(sheet, date_info['day'], data)
-                    added_rows.append(f"{date_info['day']}.{date_info['month']:02d}(стр.{row})")
+                    if row:
+                        added_rows.append(f"{date_info['day']}.{date_info['month']:02d}(стр.{row})")
                 
-                results[sheet_name] = added_rows
+                if added_rows:
+                    results[sheet_name] = added_rows
             
-            self.wb.save(self.filename)
-            self.show_data()
+            # Заполняем листы "Осень" и "Весна"
+            season_results = self.fill_season_sheets(data)
             
-            msg_lines = ["Записи добавлены:"]
-            for sheet_name, dates in results.items():
-                msg_lines.append(f"{sheet_name}: {', '.join(dates)}")
-            
-            messagebox.showinfo("Успех", "\n".join(msg_lines))
-            
-            for entry in self.entries.values():
-                if isinstance(entry, ttk.Entry):
-                    entry.delete(0, tk.END)
-                elif isinstance(entry, ttk.Combobox):
-                    entry.set(self.LOAD_TYPES[0])
+            # Сохраняем файл
+            if self.safe_save_workbook():
+                # Обновляем отображение
+                self.show_data()
                 
+                msg_lines = ["Записи добавлены:"]
+                for sheet_name, dates in results.items():
+                    msg_lines.append(f"{sheet_name}: {', '.join(dates)}")
+                
+                if season_results:
+                    msg_lines.append("\nСеместровые листы:")
+                    for sheet_name, result in season_results.items():
+                        msg_lines.append(f"{sheet_name}: {result}")
+                
+                if results or season_results:
+                    messagebox.showinfo("Успех", "\n".join(msg_lines))
+                    
+                    # Очищаем поля ввода
+                    for field in ['discipline', 'group', 'lecture', 'practice', 'lab']:
+                        if field in self.entries:
+                            if isinstance(self.entries[field], ttk.Entry):
+                                self.entries[field].delete(0, tk.END)
+                    
+                    if 'load_type' in self.entries:
+                        self.entries['load_type'].set(self.LOAD_TYPES[0])
+                else:
+                    messagebox.showwarning("Внимание", "Не удалось добавить записи")
+                
+        except ValueError as e:
+            messagebox.showerror("Ошибка", "Проверьте числовые поля (Лекции, Практические, Лабораторные) - они должны содержать только числа")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка при добавлении записей: {e}")
+    
+    def fill_season_sheets(self, data):
+        """Заполняет листы 'Осень' и 'Весна' данными и возвращает результаты"""
+        season_results = {}
+        
+        try:
+            if not self.selected_dates:
+                return season_results
+            
+            months = set(date_info['month'] for date_info in self.selected_dates)
+            
+            autumn_months = {9, 10, 11, 12}
+            spring_months = {1, 2, 3, 4, 5}
+            
+            fill_autumn = any(month in autumn_months for month in months)
+            fill_spring = any(month in spring_months for month in months)
+            
+            if fill_autumn and 'осень' in self.wb.sheetnames:
+                result = self.fill_season_sheet('осень', data)
+                if result:
+                    season_results['осень'] = result
+            
+            if fill_spring and 'весна' in self.wb.sheetnames:
+                result = self.fill_season_sheet('весна', data)
+                if result:
+                    season_results['весна'] = result
+                    
+        except Exception as e:
+            print(f"Ошибка при заполнении семестровых листов: {e}")
+        
+        return season_results
+    
+    def fill_season_sheet(self, sheet_name, data):
+        """Заполняет конкретный семестровый лист и возвращает результат"""
+        try:
+            sheet = self.wb[sheet_name]
+            
+            row = 5
+            max_rows_to_check = 50
+            
+            while row <= max_rows_to_check:
+                try:
+                    cell_d = sheet[f'D{row}']
+                    cell_e = sheet[f'E{row}']
+                    cell_f = sheet[f'F{row}']
+                    
+                    def is_cell_empty(cell):
+                        try:
+                            return cell.value is None or str(cell.value).strip() == ''
+                        except:
+                            return True
+                    
+                    if (is_cell_empty(cell_d) and 
+                        is_cell_empty(cell_e) and 
+                        is_cell_empty(cell_f)):
+                        break
+                except:
+                    pass
+                
+                row += 2
+            
+            if row > max_rows_to_check:
+                return f"Не найдено свободных строк (проверено до строки {max_rows_to_check})"
+            
+            try:
+                sheet[f'D{row}'] = data['discipline']
+                sheet[f'E{row}'] = data['group']
+                sheet[f'F{row}'] = data['load_type']
+                
+                for col in ['D', 'E', 'F']:
+                    sheet[f'{col}{row}'].alignment = Alignment(horizontal='center', vertical='center')
+                
+                return f"строка {row}: {data['discipline']}, {data['group']}, {data['load_type']}"
+                
+            except Exception as write_error:
+                return f"Ошибка записи в строку {row}: {str(write_error)}"
+            
+        except Exception as e:
+            return f"Ошибка: {str(e)}"
     
     def add_entry_to_sheet(self, sheet, day, data):
-        last_row = self.START_ROW
-        while sheet[f'E{last_row}'].value is not None:
-            last_row += 1
-        
-        existing_date_rows = []
-        row = self.START_ROW
-        while sheet[f'E{row}'].value is not None:
-            existing_day = sheet[f'E{row}'].value
-            if isinstance(existing_day, (int, float)) and int(existing_day) == day:
-                existing_date_rows.append(row)
-            row += 1
-        
-        if existing_date_rows:
-            last_date_row = max(existing_date_rows)
-            insert_row = last_date_row + 1
-            self.shift_rows_down(sheet, insert_row, last_row)
-            self.fill_row_data(sheet, insert_row, day, data)
-            return insert_row
-        else:
-            return self.insert_entry_sorted(sheet, day, data, last_row)
+        """Добавляет запись в лист и возвращает номер строки"""
+        try:
+            last_row = self.START_ROW
+            while sheet[f'E{last_row}'].value is not None:
+                last_row += 1
+            
+            existing_date_rows = []
+            row = self.START_ROW
+            while sheet[f'E{row}'].value is not None:
+                existing_day = sheet[f'E{row}'].value
+                if isinstance(existing_day, (int, float)) and int(existing_day) == day:
+                    existing_date_rows.append(row)
+                row += 1
+            
+            if existing_date_rows:
+                last_date_row = max(existing_date_rows)
+                insert_row = last_date_row + 1
+                self.shift_rows_down(sheet, insert_row, last_row)
+                self.fill_row_data(sheet, insert_row, day, data)
+                return insert_row
+            else:
+                return self.insert_entry_sorted(sheet, day, data, last_row)
+        except Exception as e:
+            print(f"Ошибка при добавлении записи: {e}")
+            return None
     
     def shift_rows_down(self, sheet, start_row, last_row):
+        """Сдвигает строки вниз"""
         for row in range(last_row, start_row - 1, -1):
             sheet[f'E{row+1}'] = sheet[f'E{row}'].value
             sheet[f'F{row+1}'] = sheet[f'F{row}'].value
@@ -695,6 +878,7 @@ class JournalApp:
             sheet.cell(row=row+1, column=14).value = sheet.cell(row=row, column=14).value
     
     def insert_entry_sorted(self, sheet, day, data, last_row):
+        """Вставляет запись в отсортированном порядке"""
         insert_row = self.START_ROW
         while sheet[f'E{insert_row}'].value is not None:
             existing_day = sheet[f'E{insert_row}'].value
@@ -707,16 +891,27 @@ class JournalApp:
         return insert_row
     
     def fill_row_data(self, sheet, row, day, data):
+        """Заполняет строку данными"""
         sheet[f'E{row}'] = day
         sheet[f'F{row}'] = data['discipline']
         sheet[f'G{row}'] = data['group']
         sheet[f'H{row}'] = data['load_type']
-        sheet.cell(row=row, column=12).value = data['lecture']
-        sheet.cell(row=row, column=13).value = data['practice']
-        sheet.cell(row=row, column=14).value = data['lab']
+        
+        if data['lecture'] != 0:
+            sheet.cell(row=row, column=12).value = data['lecture']
+        if data['practice'] != 0:
+            sheet.cell(row=row, column=13).value = data['practice']
+        if data['lab'] != 0:
+            sheet.cell(row=row, column=14).value = data['lab']
     
     def run(self):
-        self.root.mainloop()
+        """Запускает приложение"""
+        try:
+            self.root.mainloop()
+        except Exception as e:
+            print(f"Ошибка при запуске приложения: {e}")
+        finally:
+            self.close_workbook()
 
 if __name__ == "__main__":
     app = JournalApp("Тетрадь_ППС_2025_2026_каф_NN_Фамилия_ИО_оч_заоч.xltx")
