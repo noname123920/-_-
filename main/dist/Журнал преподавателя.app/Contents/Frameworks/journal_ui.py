@@ -1,0 +1,1 @@
+../Resources/journal_ui.py
